@@ -11,53 +11,97 @@ class WebhookController {
    * @param {object} res - Express response object
    */
   async handleWhatsAppWebhook(req, res) {
+    // Log request details for debugging
+    console.log('WhatsApp webhook request received:');
+    console.log('Method:', req.method);
+    console.log('Headers:', JSON.stringify(req.headers));
+    
     try {
       // Verify webhook if it's a GET request (needed for WhatsApp setup)
       if (req.method === 'GET') {
+        console.log('Processing webhook verification request');
+        console.log('Query parameters:', JSON.stringify(req.query));
+        
         const mode = req.query['hub.mode'];
         const token = req.query['hub.verify_token'];
         const challenge = req.query['hub.challenge'];
         
+        // Verify token from environment variable
+        const expectedToken = process.env.WEBHOOK_VERIFY_TOKEN;
+        console.log(`Expected token: ${expectedToken}, Received token: ${token}`);
+        
         // Verify that the mode and token match
-        // Note: Configure the WEBHOOK_VERIFY_TOKEN in your .env file
-        if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
-          console.log('WhatsApp webhook verified');
+        if (mode === 'subscribe' && token === expectedToken) {
+          console.log('✅ WhatsApp webhook verified successfully');
+          // Return the challenge string that Facebook sends to verify the webhook
           return res.status(200).send(challenge);
         } else {
-          console.error('WhatsApp webhook verification failed');
+          console.error('❌ WhatsApp webhook verification failed');
+          console.error(`Mode: ${mode}, Expected: subscribe`);
+          console.error(`Token: ${token}, Expected: ${expectedToken}`);
+          
+          // Return 403 Forbidden if verification fails
           return res.sendStatus(403);
         }
       }
 
       // Handle POST request (incoming messages)
       const body = req.body;
+      console.log('Webhook POST body:', JSON.stringify(body, null, 2));
 
-      // Check if this is a WhatsApp message
-      if (!body.object || !body.entry || !body.entry[0].changes) {
+      // Check if this is a valid WhatsApp message payload
+      if (!body || !body.object) {
+        console.error('Invalid request body format');
+        return res.sendStatus(400);
+      }
+
+      // Verify this is a page/whatsapp webhook
+      if (body.object !== 'whatsapp_business_account') {
+        console.error(`Unexpected webhook object type: ${body.object}`);
+        return res.sendStatus(400);
+      }
+
+      // Check for valid entries
+      if (!body.entry || !body.entry[0] || !body.entry[0].changes) {
+        console.error('Missing expected webhook payload structure');
         return res.sendStatus(400);
       }
 
       const changes = body.entry[0].changes;
       
       for (const change of changes) {
-        if (change.field !== 'messages') continue;
+        if (change.field !== 'messages') {
+          console.log(`Ignoring change for field: ${change.field}`);
+          continue;
+        }
         
         const value = change.value;
-        if (!value || !value.messages || !value.messages.length) continue;
+        if (!value || !value.messages || !value.messages.length) {
+          console.log('No messages in this change');
+          continue;
+        }
         
         // Process each message
         for (const message of value.messages) {
-          await this.processMessage(message, value.metadata);
+          try {
+            await this.processMessage(message, value.metadata);
+          } catch (messageError) {
+            console.error('Error processing individual message:', messageError);
+            // Continue processing other messages even if one fails
+          }
         }
       }
 
-      // Return success response to WhatsApp
+      // Always return a 200 OK to WhatsApp to acknowledge receipt
+      console.log('Webhook processing completed successfully');
       return res.status(200).json({ status: 'success' });
     } catch (error) {
       console.error('WhatsApp webhook error:', error);
-      return res.status(500).json({
+      // Always respond with 200 to WhatsApp even on error after we've processed the request
+      // This prevents WhatsApp from retrying the webhook repeatedly
+      return res.status(200).json({
         status: 'error',
-        message: error.message || 'Error processing webhook'
+        message: 'Error occurred but acknowledged receipt'
       });
     }
   }
@@ -69,9 +113,12 @@ class WebhookController {
    */
   async processMessage(message, metadata) {
     try {
+      console.log('Processing message:', JSON.stringify(message));
+      console.log('Message metadata:', JSON.stringify(metadata));
+      
       // Only process text messages for now
       if (message.type !== 'text' || !message.text || !message.text.body) {
-        console.log('Ignoring non-text message');
+        console.log('Ignoring non-text message of type:', message.type);
         return;
       }
 
@@ -84,6 +131,7 @@ class WebhookController {
       const bookingData = whatsappService.parseBookingMessage(messageText);
       
       if (!bookingData) {
+        console.log('Not a booking request, sending help message');
         // Not a booking request, send help message
         await whatsappService.sendTextMessage(
           fromNumber,
@@ -92,14 +140,17 @@ class WebhookController {
         return;
       }
 
+      console.log('Parsed booking data:', bookingData);
+
       // Find business profile that has this WhatsApp number registered
+      console.log('Looking up business using phone_number_id:', metadata.phone_number_id);
       const profileSnapshot = await db.collection('businessProfiles')
         .where('whatsappNumber', '==', metadata.phone_number_id)
         .limit(1)
         .get();
 
       if (profileSnapshot.empty) {
-        console.error('No business found for WhatsApp number');
+        console.error('No business found for WhatsApp number:', metadata.phone_number_id);
         await whatsappService.sendTextMessage(
           fromNumber,
           'Sorry, this number is not registered with any parlour.'
@@ -110,8 +161,12 @@ class WebhookController {
       const businessProfile = profileSnapshot.docs[0].data();
       const parlourId = profileSnapshot.docs[0].id;
       
+      console.log('Found business:', businessProfile.businessName, 'ID:', parlourId);
+      
       // Check if service exists
       const services = businessProfile.services || [];
+      console.log('Available services:', services.map(s => s.name).join(', '));
+      
       let matchingService = services.find(s => 
         s.name.toLowerCase() === bookingData.service.toLowerCase()
       );
@@ -126,6 +181,7 @@ class WebhookController {
       if (!matchingService) {
         // Service not found
         const availableServices = services.map(s => s.name).join(', ');
+        console.log('Service not found, available services:', availableServices);
         
         await whatsappService.sendTextMessage(
           fromNumber,
@@ -133,6 +189,8 @@ class WebhookController {
         );
         return;
       }
+
+      console.log('Matched service:', matchingService.name);
 
       // Create appointment
       const appointmentData = {
@@ -152,10 +210,14 @@ class WebhookController {
         notes: `Booked via WhatsApp with message: "${messageText}"`
       };
 
+      console.log('Creating appointment with data:', appointmentData);
+
       // Save to Firestore
       const appointmentRef = await db.collection('appointments').add(appointmentData);
+      console.log('Appointment created with ID:', appointmentRef.id);
 
       // Send confirmation
+      console.log('Sending appointment confirmation to:', fromNumber);
       await whatsappService.sendAppointmentConfirmation(
         fromNumber,
         {
@@ -166,7 +228,7 @@ class WebhookController {
         }
       );
 
-      console.log(`Created appointment ${appointmentRef.id} from WhatsApp`);
+      console.log(`Successfully created appointment ${appointmentRef.id} from WhatsApp`);
     } catch (error) {
       console.error('Error processing message:', error);
       // Send error message to user
@@ -180,6 +242,8 @@ class WebhookController {
           console.error('Error sending error message:', sendError);
         }
       }
+      // Re-throw to let the caller handle it
+      throw error;
     }
   }
 
@@ -191,6 +255,7 @@ class WebhookController {
    */
   parseDate(dateStr) {
     try {
+      console.log('Parsing date string:', dateStr);
       // Handle common formats like "2nd May", "May 2", "2/5/2023", etc.
       // This is a simplified implementation
       const months = {
@@ -215,6 +280,7 @@ class WebhookController {
       date = new Date(dateStr);
       
       if (!isNaN(date.getTime())) {
+        console.log('Date parsed using Date constructor:', date.toISOString());
         return date.toISOString().split('T')[0];
       }
 
@@ -231,6 +297,7 @@ class WebhookController {
           const year = new Date().getFullYear();
           
           date = new Date(year, month, day);
+          console.log('Date parsed using day-month pattern:', date.toISOString());
           return date.toISOString().split('T')[0];
         }
       }
@@ -248,6 +315,7 @@ class WebhookController {
           const year = new Date().getFullYear();
           
           date = new Date(year, month, day);
+          console.log('Date parsed using month-day pattern:', date.toISOString());
           return date.toISOString().split('T')[0];
         }
       }
@@ -275,10 +343,12 @@ class WebhookController {
         }
         
         date = new Date(year, month, day);
+        console.log('Date parsed using numeric pattern:', date.toISOString());
         return date.toISOString().split('T')[0];
       }
 
       // If we can't parse, return today's date
+      console.log('Could not parse date, using today');
       return new Date().toISOString().split('T')[0];
     } catch (error) {
       console.error('Error parsing date:', error);

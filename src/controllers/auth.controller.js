@@ -73,7 +73,6 @@ class AuthController {
   async getCurrentUser(req, res) {
     try {
       const { uid } = req.user;
-
       // Get user document from Firestore
       const userDoc = await db.collection('users').doc(uid).get();
 

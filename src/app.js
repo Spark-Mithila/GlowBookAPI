@@ -19,21 +19,23 @@ app.use(cors({
   origin: process.env.FRONTEND_URL,
   optionsSuccessStatus: 200
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Important: The webhook route needs raw body for verification
+// So we add the JSON body parser to all routes EXCEPT the webhook routes
+app.use('/api/auth', express.json(), express.urlencoded({ extended: true }), authRoutes);
+app.use('/api/profile', express.json(), express.urlencoded({ extended: true }), profileRoutes);
+app.use('/api/appointments', express.json(), express.urlencoded({ extended: true }), appointmentRoutes);
+app.use('/api/customers', express.json(), express.urlencoded({ extended: true }), customerRoutes);
+app.use('/api/admin', express.json(), express.urlencoded({ extended: true }), adminRoutes);
+
+// Special handling for webhook routes - NO body parser middleware here
+// The webhook routes itself will handle JSON parsing as needed
+app.use('/api/webhook', webhookRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', message: 'GlowbookAPI is running' });
 });
-
-// Register routes
-app.use('/api/auth', authRoutes);
-app.use('/api/profile', profileRoutes);
-app.use('/api/appointments', appointmentRoutes);
-app.use('/api/customers', customerRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/webhook', webhookRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
