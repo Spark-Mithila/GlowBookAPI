@@ -12,8 +12,8 @@ require('dotenv').config();
 
 // Configuration
 const WEBHOOK_URL = 'http://localhost:4000/api/webhook/whatsapp'; // Your local webhook URL
-const FROM_PHONE = '+9199XXXXXXXX'; // Test sender's phone number
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789'; // Your WhatsApp Phone Number ID
+const FROM_PHONE = '+919031285927'; // Test sender's phone number
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || '15556453827'; // Your WhatsApp Phone Number ID
 
 // Function to simulate a WhatsApp webhook call
 async function simulateWebhookCall(messageType, messageContent) {
@@ -252,8 +252,59 @@ async function simulateVerification() {
     }
   }
 }
+// Add this new function to your whatsapp-webhook-test.js file
 
-// Main function
+async function testTemplateMessage() {
+  try {
+    const axios = require('axios');
+    require('dotenv').config();
+    
+    const WHATSAPP_API_URL = `https://graph.facebook.com/v17.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+    
+    // This is your own phone number for testing
+    const TEST_RECIPIENT = "+918340606816"; // Replace with your number
+    
+    const payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: TEST_RECIPIENT,
+      type: "template",
+      template: {
+        name: "appointment_confirmation", // Your exact template name
+        language: { code: "en" },
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: "Test Customer" },
+              { type: "text", text: "Haircut" },
+              { type: "text", text: "May 10, 2025" },
+              { type: "text", text: "3:00 PM" }
+            ]
+          }
+        ]
+      }
+    };
+    
+    const headers = {
+      'Authorization': `Bearer ${process.env.WHATSAPP_API_TOKEN2}`,
+      'Content-Type': 'application/json'
+    };
+    
+    console.log("Sending template message...");
+    const response = await axios.post(WHATSAPP_API_URL, payload, { headers });
+    
+    console.log("Template message sent successfully!");
+    console.log("Response:", response.data);
+  } catch (error) {
+    console.error("Error sending template message:", error.message);
+    if (error.response) {
+      console.error("Error response data:", error.response.data);
+    }
+  }
+}
+
+// Add this to your main function options
 async function main() {
   const args = process.argv.slice(2);
   
@@ -268,6 +319,8 @@ async function main() {
     await simulateWebhookCall('button', args[1]);
   } else if (args[0] === 'interactive' && args[1]) {
     await simulateWebhookCall('interactive', args[1]);
+  } else if (args[0] === 'template') {
+    await testTemplateMessage();  // Add this line
   } else {
     console.log('Usage:');
     console.log('  node whatsapp-webhook-test.js                 # Run all tests');
@@ -275,6 +328,7 @@ async function main() {
     console.log('  node whatsapp-webhook-test.js text "message"  # Send text message');
     console.log('  node whatsapp-webhook-test.js button "id"     # Send button response');
     console.log('  node whatsapp-webhook-test.js interactive "type:id:title"  # Send interactive response');
+    console.log('  node whatsapp-webhook-test.js template        # Test template message');  // Add this line
   }
 }
 
